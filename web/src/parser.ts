@@ -124,7 +124,6 @@ export class JpiEdmParser {
     const flight = new Flight(
       indexEntry,
       this.data,
-      this.header.binaryOffset,
       this.temperatureUnit
     ).parse();
 

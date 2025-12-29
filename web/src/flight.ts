@@ -51,7 +51,6 @@ export class Flight {
   initialLong: number | null = null;
 
   private data: DataView;
-  private binaryOffset: number;
   private temperatureUnit: TemperatureUnit;
   private dataLength: number;
   private flightStart: number = 0;
@@ -71,13 +70,11 @@ export class Flight {
   constructor(
     indexEntry: FlightIndex,
     data: ArrayBuffer,
-    binaryOffset: number,
     temperatureUnit: TemperatureUnit = 'original'
   ) {
     this.indexEntry = indexEntry;
     this.flightNumber = indexEntry.flightNumber;
     this.data = new DataView(data);
-    this.binaryOffset = binaryOffset;
     this.temperatureUnit = temperatureUnit;
     this.dataLength = indexEntry.dataLength;
   }
@@ -180,18 +177,31 @@ export class Flight {
   }
 
   private findFlightStart(): number | null {
-    // Find the flight by searching for its flight number in big-endian
+    // Use the pre-found actualOffset from header parsing
+    // This was found using robust signature matching in header-parser.ts
+    const actualOffset = this.indexEntry.actualOffset;
+
+    if (actualOffset < 0) {
+      // Flight position wasn't found during header parsing
+      return null;
+    }
+
+    // Validate the offset is within bounds
+    if (actualOffset + FLIGHT_HEADER_SIZE > this.data.byteLength) {
+      return null;
+    }
+
+    // Sanity check: verify flight number at this position
     const flightNumHigh = (this.flightNumber >> 8) & 0xFF;
     const flightNumLow = this.flightNumber & 0xFF;
 
-    for (let pos = this.binaryOffset; pos < this.data.byteLength - FLIGHT_HEADER_SIZE; pos++) {
-      if (this.data.getUint8(pos) === flightNumHigh &&
-          this.data.getUint8(pos + 1) === flightNumLow) {
-        return pos;
-      }
+    if (this.data.getUint8(actualOffset) !== flightNumHigh ||
+        this.data.getUint8(actualOffset + 1) !== flightNumLow) {
+      // This shouldn't happen if header-parser worked correctly
+      return null;
     }
 
-    return null;
+    return actualOffset;
   }
 
   private parseFlightHeader(): void {

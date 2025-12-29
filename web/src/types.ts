@@ -35,6 +35,8 @@ export interface FlightIndex {
   flightNumber: number;
   dataWords: number;
   dataLength: number; // dataWords * 2
+  startOffset: number; // Estimated byte offset from start of binary data (cumulative)
+  actualOffset: number; // Actual found byte offset (absolute position in file)
 }
 
 export interface Timestamp {
