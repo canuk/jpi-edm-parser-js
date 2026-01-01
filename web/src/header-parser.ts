@@ -77,65 +77,59 @@ export function parseHeader(data: Uint8Array): ParsedHeader {
 }
 
 /**
- * Find actual byte positions for all flights.
+ * Find actual byte positions for all flights using sequential position calculation.
  *
- * Strategy:
- * 1. Search for each flight's number in the binary data
- * 2. Validate that what follows is a valid flight header (correct date/time/interval format)
- * 3. Search sequentially - each flight's search starts after the previous flight's data
- *    This prevents false matches from bytes within earlier flight data
+ * JPI data_words = ceiling(actual_bytes / 2), meaning:
+ * - When actual flight length is ODD, data_words * 2 = actual + 1
+ * - The discrepancy is ALWAYS 0 or 1 byte, never more
+ *
+ * Algorithm: For each flight, check expected position AND expected-1 for valid header.
+ * This is bounded (exactly 2 positions) rather than arbitrary searching.
  */
 function findFlightPositions(data: Uint8Array, result: ParsedHeader): void {
   if (result.flights.length === 0) return;
 
   const dataView = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let currentPos = result.binaryOffset;
 
-  // Track search position - start at beginning of binary data
-  let searchStart = result.binaryOffset;
+  for (const flight of result.flights) {
+    // Check expected position AND expected-1 (handles odd-length flight rounding)
+    const foundOffset = findFlightAtPosition(dataView, flight.flightNumber, currentPos);
 
-  for (let i = 0; i < result.flights.length; i++) {
-    const flight = result.flights[i];
-
-    const pos = findFlightHeader(
-      dataView,
-      searchStart,
-      flight.flightNumber
-    );
-
-    if (pos !== null) {
-      flight.actualOffset = pos;
-      // Next search starts after this flight's data (with small tolerance for alignment)
-      searchStart = pos + flight.dataLength - 10;
-      if (searchStart < result.binaryOffset) {
-        searchStart = result.binaryOffset;
-      }
+    if (foundOffset !== null) {
+      flight.actualOffset = foundOffset;
+      // Move forward by data_words * 2 for next flight's expected position
+      currentPos = foundOffset + flight.dataLength;
+    } else {
+      // actualOffset remains -1 (set in parseFlightIndex)
+      // Still advance by expected length for next flight
+      currentPos += flight.dataLength;
     }
-    // If not found, actualOffset remains -1, but continue searching from same position
   }
 }
 
 /**
- * Find a flight header by matching flight number + valid header structure.
- * Validates that the bytes form a proper header with reasonable date/time/interval.
+ * Find flight header at expected position, checking both expected AND expected-1.
+ * Returns the actual offset if found, or null if not found at either position.
  */
-function findFlightHeader(
+function findFlightAtPosition(
   dataView: DataView,
-  searchStart: number,
-  flightNumber: number
+  flightNumber: number,
+  expectedPos: number
 ): number | null {
   const flightNumHigh = (flightNumber >> 8) & 0xFF;
   const flightNumLow = flightNumber & 0xFF;
-  const searchEnd = dataView.byteLength - FLIGHT_HEADER_SIZE;
 
-  for (let pos = searchStart; pos < searchEnd; pos++) {
-    // Check flight number (big-endian)
-    if (dataView.getUint8(pos) !== flightNumHigh ||
-        dataView.getUint8(pos + 1) !== flightNumLow) {
-      continue;
-    }
+  // Check expected position first, then 1 byte before
+  // (data_words rounds UP for odd-length flights)
+  for (const delta of [0, -1]) {
+    const pos = expectedPos + delta;
+    if (pos < 0 || pos + FLIGHT_HEADER_SIZE > dataView.byteLength) continue;
 
-    // Validate this looks like a real flight header
-    if (isValidFlightHeader(dataView, pos)) {
+    // Check for flight number match (big-endian)
+    if (dataView.getUint8(pos) === flightNumHigh &&
+        dataView.getUint8(pos + 1) === flightNumLow &&
+        isValidFlightHeader(dataView, pos)) {
       return pos;
     }
   }
